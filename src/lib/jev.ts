@@ -110,30 +110,123 @@ export async function evaluate(body: Record<string, unknown>, signal?: AbortSign
     signal,
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new EvalError(data?.message || data?.detail || `${data?.error ?? 'Request failed'} (HTTP ${res.status})`, res.status)
+  if (!res.ok) {
+    // The function forwards a provider throttle as a 429; older deployments
+    // wrapped it in a 502 with the upstream status in the body.
+    const status = res.status === 502 && data?.status === 429 ? 429 : res.status
+    throw new EvalError(data?.message || data?.detail || `${data?.error ?? 'Request failed'} (HTTP ${res.status})`, status)
+  }
   return data as EvalResult
 }
 
-/** Run `items` through `fn` with at most `limit` in flight, reporting each result as it lands. */
-export async function pooled<T, R>(
+export type PoolStats = { inFlight: number; limit: number; throttled: number; retried: number }
+
+export type PoolOptions = {
+  /** Requests in flight to begin with. */
+  start?: number
+  min?: number
+  max?: number
+  /** How many times one item may be re-queued after a 429 before it is reported as failed. */
+  maxRetries?: number
+  onStats?: (s: PoolStats) => void
+}
+
+/**
+ * Run `items` through `fn` with adaptive concurrency. The provider behind the
+ * gateway throttles sustained load with 429s, so the pool halves its in-flight
+ * limit on every throttle, re-queues the item with exponential backoff, and
+ * creeps the limit back up after a run of successes. Results are reported as
+ * they land, in any order; the returned stats say how hard the pool was pushed
+ * back.
+ */
+export function runPool<T, R>(
   items: T[],
-  limit: number,
   fn: (item: T, index: number) => Promise<R>,
   onResult: (index: number, result: R | Error) => void,
+  opts: PoolOptions = {},
   signal?: AbortSignal,
-): Promise<void> {
-  let next = 0
-  const worker = async () => {
-    while (next < items.length && !signal?.aborted) {
-      const i = next++
-      try {
-        onResult(i, await fn(items[i], i))
-      } catch (e) {
-        onResult(i, e instanceof Error ? e : new Error(String(e)))
+): Promise<PoolStats> {
+  const start = opts.start ?? 4
+  const min = opts.min ?? 1
+  const max = opts.max ?? 8
+  const maxRetries = opts.maxRetries ?? 7
+  let limit = start
+  let inFlight = 0
+  let throttled = 0
+  let retried = 0
+  let streak = 0
+  let remaining = items.length
+  const queue = items.map((_, i) => ({ i, attempt: 0, at: 0 }))
+
+  return new Promise((resolve) => {
+    const stats = () => ({ inFlight, limit, throttled, retried })
+    const report = () => opts.onStats?.(stats())
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      resolve(stats())
+    }
+
+    const pump = () => {
+      if (finished) return
+      if (signal?.aborted || remaining === 0) {
+        if (inFlight === 0) finish()
+        return
+      }
+      const now = Date.now()
+      while (inFlight < limit) {
+        const idx = queue.findIndex((q) => q.at <= now)
+        if (idx === -1) break
+        const job = queue.splice(idx, 1)[0]
+        inFlight++
+        report()
+        fn(items[job.i], job.i)
+          .then(
+            (r) => {
+              streak++
+              if (streak >= 10 && limit < max) {
+                limit++
+                streak = 0
+              }
+              remaining--
+              onResult(job.i, r)
+            },
+            (e) => {
+              const status = e instanceof EvalError ? e.status : 0
+              const isThrottle = status === 429
+              // 502/504 here mean the gateway or provider buckled, not that the
+              // request was bad; they are worth a retry but do not imply a limit.
+              const retryable = isThrottle || status === 502 || status === 504
+              if (retryable && job.attempt < maxRetries && !signal?.aborted) {
+                retried++
+                streak = 0
+                if (isThrottle) {
+                  throttled++
+                  limit = Math.max(min, Math.floor(limit / 2))
+                }
+                const delay = 600 * 2 ** Math.min(job.attempt, 5) + Math.random() * 500
+                queue.push({ i: job.i, attempt: job.attempt + 1, at: Date.now() + delay })
+              } else {
+                remaining--
+                onResult(job.i, e instanceof Error ? e : new Error(String(e)))
+              }
+            },
+          )
+          .finally(() => {
+            inFlight--
+            report()
+            pump()
+          })
+      }
+      // Everything left is waiting out a backoff: wake up when the first one is due.
+      if (inFlight === 0 && remaining > 0 && queue.length > 0) {
+        const next = Math.min(...queue.map((q) => q.at))
+        window.setTimeout(pump, Math.max(50, next - Date.now()))
       }
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+    pump()
+  })
 }
 
 /** The top two options of a choice answer, for spotting comments that carry two signals. */

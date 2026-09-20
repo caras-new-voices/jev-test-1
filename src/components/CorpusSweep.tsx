@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { category, shortName } from '../lib/data'
 import type { Brand, Platform } from '../lib/types'
-import { DIMENSION_KEYS, DIMENSION_LABELS, evaluate, pct, pooled, topTwo } from '../lib/jev'
-import type { BooleanAnswer, ChoiceAnswer, EvalResult, ScoreAnswer } from '../lib/jev'
+import { DIMENSION_KEYS, DIMENSION_LABELS, evaluate, pct, runPool, topTwo } from '../lib/jev'
+import type { BooleanAnswer, ChoiceAnswer, EvalResult, PoolStats, ScoreAnswer } from '../lib/jev'
 import { useAllBrands } from './Compare'
 import { BrandChip, Card, Pill, Quote, SectionTitle, StatTile } from './ui'
 
@@ -17,7 +17,9 @@ import { BrandChip, Card, Pill, Quote, SectionTitle, StatTile } from './ui'
  */
 
 const PLATFORMS: Platform[] = ['tiktok', 'instagram', 'youtube']
-const CONCURRENCY = 8
+/** Starting concurrency. The pool adapts from here: halves on a throttle, creeps up on success. */
+const START_CONCURRENCY = 3
+const MAX_CONCURRENCY = 6
 
 type Item = { brandId: number; brand: string; platform: Platform; offline: string; text: string }
 type Row = Item & { result?: EvalResult; error?: string }
@@ -56,31 +58,48 @@ export default function CorpusSweep() {
   const [elapsed, setElapsed] = useState(0)
   const [threshold, setThreshold] = useState(0.8)
   const [view, setView] = useState<'disagree' | 'multi' | 'spam' | 'calls' | 'urgent'>('disagree')
+  const [pool, setPool] = useState<PoolStats | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const items = useMemo(() => (brands ? collectQuotes(brands, scope) : []), [brands, scope])
 
-  async function run() {
+  /**
+   * Run the pack over a set of row indices. A fresh run covers every quote in
+   * scope; "retry failed" passes only the rows that errored last time and keeps
+   * everything else.
+   */
+  async function run(indices?: number[]) {
     if (!brands || running) return
     const ctl = new AbortController()
     abortRef.current = ctl
     const start = Date.now()
     setRunning(true)
-    setRows(items.map((it) => ({ ...it })))
+    let base: Row[]
+    let targets: number[]
+    if (indices) {
+      targets = indices
+      base = rows.map((r, i) => (targets.includes(i) ? { ...r, error: undefined } : r))
+    } else {
+      base = items.map((it) => ({ ...it }))
+      targets = base.map((_, i) => i)
+    }
+    setRows(base)
     const tick = window.setInterval(() => setElapsed(Date.now() - start), 100)
-    await pooled(
-      items,
-      CONCURRENCY,
-      (it) => evaluate({ text: it.text, pack: 'triage' }, ctl.signal),
-      (i, res) => {
+    const stats = await runPool(
+      targets,
+      (i) => evaluate({ text: base[i].text, pack: 'triage' }, ctl.signal),
+      (k, res) => {
+        const i = targets[k]
         setRows((prev) => {
           const next = prev.slice()
           next[i] = res instanceof Error ? { ...next[i], error: res.message } : { ...next[i], result: res }
           return next
         })
       },
+      { start: START_CONCURRENCY, max: MAX_CONCURRENCY, onStats: setPool },
       ctl.signal,
     )
+    setPool(stats)
     window.clearInterval(tick)
     setElapsed(Date.now() - start)
     setRunning(false)
@@ -143,10 +162,16 @@ export default function CorpusSweep() {
             something the batch job never was: <em>how sure are you?</em>
           </p>
           <p>
-            Press run. Each quote goes through the same four-question triage pack, {CONCURRENCY} at a time. When it
-            finishes you get a confusion matrix against the offline labels, the quotes that carry two signals at once,
-            the spam the offline pass let through, a ranked call list, and — the useful part — a confidence slider that
-            shows how much of the corpus could be routed automatically and how much genuinely needs a human.
+            Press run. Each quote goes through the same four-question triage pack, several at a time. When it finishes
+            you get a confusion matrix against the offline labels, the quotes that carry two signals at once, the spam
+            the offline pass let through, a ranked call list, and — the useful part — a confidence slider that shows how
+            much of the corpus could be routed automatically and how much genuinely needs a human.
+          </p>
+          <p className="text-xs text-muted">
+            Honesty note: the provider behind the gateway throttles sustained load on this key tier. The pool starts
+            at {START_CONCURRENCY} requests in flight, halves when it is pushed back, and retries with backoff — you will
+            see that happen in the counter. Model-side latency per answer stays in the low hundreds of milliseconds; the
+            wall-clock time is the queue, not the model.
           </p>
         </div>
       </Card>
@@ -167,14 +192,25 @@ export default function CorpusSweep() {
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {!running ? (
-            <button
-              type="button"
-              onClick={run}
-              disabled={!brands || items.length === 0}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-page transition disabled:opacity-40"
-            >
-              {rows.length ? `Run again on ${scopeLabel}` : `Run Jev on ${scopeLabel}`}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => run()}
+                disabled={!brands || items.length === 0}
+                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-page transition disabled:opacity-40"
+              >
+                {rows.length ? `Run again on ${scopeLabel}` : `Run Jev on ${scopeLabel}`}
+              </button>
+              {failed.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => run(rows.map((r, i) => (r.error ? i : -1)).filter((i) => i >= 0))}
+                  className="rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-surface-2"
+                >
+                  Retry {failed.length} failed
+                </button>
+              )}
+            </>
           ) : (
             <button type="button" onClick={stop} className="rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-ink hover:bg-surface-2">
               Stop
@@ -184,10 +220,23 @@ export default function CorpusSweep() {
           {rows.length > 0 && (
             <span className="text-xs tabular text-muted">
               {done.length + failed.length}/{rows.length} · {(elapsed / 1000).toFixed(1)} s · ${cost.toFixed(4)}
+              {pool && (
+                <>
+                  {' '}
+                  · {pool.inFlight} in flight (limit {pool.limit})
+                  {pool.throttled > 0 && <> · pushed back {pool.throttled}×</>}
+                  {pool.retried > pool.throttled && <> · {pool.retried - pool.throttled} gateway retries</>}
+                </>
+              )}
               {failed.length > 0 && <> · {failed.length} failed</>}
             </span>
           )}
         </div>
+        {failed.length > 0 && !running && (
+          <p className="mt-2 text-xs text-critical">
+            {failed.length} quote{failed.length === 1 ? '' : 's'} gave up after repeated pushback — last reason: “{failed[0].error}”. Retry when the provider calms down; nothing else is lost.
+          </p>
+        )}
         {rows.length > 0 && (
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
             <div className="h-full rounded-full transition-[width] duration-150" style={{ width: `${progress * 100}%`, background: 'var(--accent)' }} />
@@ -206,7 +255,11 @@ export default function CorpusSweep() {
               <StatTile label="Agree with offline label" value={pct(agreeRate)} hint={`${agree.length} of ${done.length} quotes`} />
               <StatTile label="Carry a second signal" value={String(multi.length)} hint="runner-up probability ≥ 25%" />
               <StatTile label="Flagged as spam" value={String(spamHits.length)} hint="the offline taxonomy had no slot for this" />
-              <StatTile label="Cost per quote" value={`$${done.length ? (cost / done.length).toFixed(6) : '–'}`} hint={`${done.length ? Math.round(elapsed / done.length) : '–'} ms each, ${CONCURRENCY} in flight`} />
+              <StatTile
+                label="Cost per quote"
+                value={`$${done.length ? (cost / done.length).toFixed(6) : '–'}`}
+                hint={`${done.length ? Math.round(done.reduce((s, r) => s + (r.result?.latencyMs ?? 0), 0) / done.length) : '–'} ms model-side each${pool ? `, ${pool.throttled} throttles` : ''}`}
+              />
             </div>
           </Card>
 

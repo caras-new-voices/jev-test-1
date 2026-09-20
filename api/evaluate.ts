@@ -27,6 +27,7 @@ const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/evaluate'
 const MODEL = 'typesafe-ai/jev'
 const MAX_TEXT_CHARS = 1200
 const MAX_STATE_CHARS = 12000
+const UPSTREAM_TIMEOUT_MS = 15000
 
 const LIMITS = {
   questions: 6,
@@ -261,10 +262,10 @@ const PACKS: Record<string, { label: string; questions: Record<string, Question>
         instructions: 'What matters most to this respondent when choosing a hair-removal product?',
         criteria: {
           price: 'Price and value',
-          skin: 'Skin comfort — irritation, cuts, sensitivity',
-          performance: 'How close, smooth, or long-lasting the result is',
-          convenience: 'Speed, ease, subscription, availability',
-          image: 'Brand image, design, what it says about them',
+          skin: 'Skin comfort and irritation',
+          performance: 'Closeness and lasting results',
+          convenience: 'Speed, ease and availability',
+          image: 'Brand image and design',
           other: 'Something else or unclear',
         },
       },
@@ -483,21 +484,37 @@ export default async function handler(request: Request): Promise<Response> {
     questions = PACKS[packName].questions
   }
 
+  // Under provider load the gateway can hold a request for 25 s+, which trips
+  // the Edge runtime's own timeout and returns an HTML error page. Give up
+  // earlier with a JSON 504 the client knows how to retry.
   const startedAt = Date.now()
+  const timeout = new AbortController()
+  const timer = setTimeout(() => timeout.abort(), UPSTREAM_TIMEOUT_MS)
   let upstream: Response
   try {
     upstream = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model: MODEL, state, questions }),
+      signal: timeout.signal,
     })
-  } catch {
+  } catch (e) {
+    clearTimeout(timer)
+    if (timeout.signal.aborted) {
+      return json({ error: 'gateway_timeout', message: `The provider did not answer within ${UPSTREAM_TIMEOUT_MS / 1000} s. Retrying.` }, 504)
+    }
     return json({ error: 'gateway_unreachable', message: 'Could not reach the AI Gateway.' }, 502)
   }
+  clearTimeout(timer)
   const latencyMs = Date.now() - startedAt
 
   if (!upstream.ok) {
     const detail = await upstream.text().catch(() => '')
+    // Pass a provider throttle through as a real 429 so the client can back off
+    // and retry instead of treating it as a failure.
+    if (upstream.status === 429) {
+      return json({ error: 'rate_limited', message: 'The provider is throttling this key. Backing off and retrying.', detail: detail.slice(0, 300) }, 429)
+    }
     return json({ error: 'gateway_error', status: upstream.status, detail: detail.slice(0, 400) }, 502)
   }
 
