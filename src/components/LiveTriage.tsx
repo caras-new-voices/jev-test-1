@@ -135,8 +135,49 @@ type Result = {
   latencyMs: number
 }
 
+/** Readable titles for the answer keys the packs use; custom keys fall back to pretty(). */
+const ANSWER_LABELS: Record<string, string> = {
+  dimension: 'Listening dimension',
+  worthACall: 'Worth a voice call',
+  urgency: 'Urgency',
+  spam: 'Spam',
+  owner: 'Owning team',
+  publicReply: 'Reply publicly',
+  tone: 'What the reply should do',
+  priority: 'Queue priority',
+  goodCandidate: 'Good interview candidate',
+  openingQuestion: 'Opening question',
+  buyerLikelihood: 'Has actually bought',
+  candour: 'Candour',
+  language: 'Language',
+  isEnglish: 'Written in English',
+  onTopic: 'About hair removal',
+}
+
 const pct = (n: number) => `${Math.round(n * 100)}%`
-const pretty = (k: string) => DIMENSION_LABELS[k] ?? k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+
+/** camelCase / snake_case → sentence case, for keys we have no label for. */
+const pretty = (k: string) =>
+  DIMENSION_LABELS[k] ??
+  ANSWER_LABELS[k] ??
+  k
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, (c) => c.toUpperCase())
+
+/**
+ * Label one option of a choice question. Prefer our short dimension names, then
+ * the criteria description the API echoes back when it is short enough to be a
+ * label (e.g. "Ukrainian" for `uk`), and only then the bare key.
+ */
+function optionLabel(key: string, spec?: QuestionSpec): string {
+  if (DIMENSION_LABELS[key]) return DIMENSION_LABELS[key]
+  if (spec?.type === 'choice') {
+    const desc = spec.criteria[key]
+    if (desc && desc.length <= 32) return desc
+  }
+  return pretty(key)
+}
 
 function Bar({ label, value, emphasis = false }: { label: string; value: number; emphasis?: boolean }) {
   return (
@@ -201,15 +242,16 @@ function AnswerBlock({ name, spec, answer }: { name: string; spec?: QuestionSpec
     <div className="rounded-lg border border-border bg-surface px-4 py-3">
       <div className="flex items-baseline justify-between gap-2">
         <div className="text-xs font-medium text-ink">{title}</div>
-        <Pill tone="accent">{pretty(answer.choice)}</Pill>
+        <Pill tone="accent">{optionLabel(answer.choice, spec)}</Pill>
       </div>
       <div className="mt-0.5 text-xs text-muted">
         choice · {ranked.length} options
         {answer.confidence !== undefined && <> · confidence {pct(answer.confidence)}</>}
       </div>
+      {spec && <div className="mt-1 text-xs text-ink-2">{spec.instructions}</div>}
       <div className="mt-2 space-y-1.5">
         {ranked.map(([key, p], i) => (
-          <Bar key={key} label={pretty(key)} value={p} emphasis={i === 0} />
+          <Bar key={key} label={optionLabel(key, spec)} value={p} emphasis={i === 0} />
         ))}
       </div>
     </div>
