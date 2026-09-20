@@ -121,6 +121,50 @@ export async function evaluate(body: Record<string, unknown>, signal?: AbortSign
 
 export type PoolStats = { inFlight: number; limit: number; throttled: number; retried: number }
 
+/* ------------------------------------------------------- answer cache */
+
+const CACHE_PREFIX = 'jev-answers-v1:'
+
+/** Small non-cryptographic hash, so a quote can key a localStorage entry. */
+function hashKey(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * Answers Jev has already given for a (pack, text) pair. Stored per browser so a
+ * presenter can warm the audit up before a meeting and still choose a fully live
+ * run. Every read and write is wrapped: storage can be absent or full, and the
+ * page must work without it.
+ */
+export function readCached(pack: string, text: string): EvalResult | null {
+  try {
+    const raw = localStorage.getItem(CACHE_PREFIX + pack + ':' + hashKey(text))
+    return raw ? (JSON.parse(raw) as EvalResult) : null
+  } catch {
+    return null
+  }
+}
+
+export function writeCached(pack: string, text: string, result: EvalResult): void {
+  try {
+    localStorage.setItem(CACHE_PREFIX + pack + ':' + hashKey(text), JSON.stringify(result))
+  } catch {
+    /* storage full or unavailable: the live answer is still on screen */
+  }
+}
+
+export function clearCached(): number {
+  try {
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith(CACHE_PREFIX))
+    keys.forEach((k) => localStorage.removeItem(k))
+    return keys.length
+  } catch {
+    return 0
+  }
+}
+
 export type PoolOptions = {
   /** Requests in flight to begin with. */
   start?: number
@@ -149,13 +193,17 @@ export function runPool<T, R>(
   const start = opts.start ?? 4
   const min = opts.min ?? 1
   const max = opts.max ?? 8
-  const maxRetries = opts.maxRetries ?? 7
+  const maxRetries = opts.maxRetries ?? 15
   let limit = start
   let inFlight = 0
   let throttled = 0
   let retried = 0
   let streak = 0
   let remaining = items.length
+  // A throttle is a shared budget, not a per-item problem: when the provider
+  // pushes back, the whole pool pauses, for longer each consecutive time.
+  let pauseUntil = 0
+  let consecutiveThrottles = 0
   const queue = items.map((_, i) => ({ i, attempt: 0, at: 0 }))
 
   return new Promise((resolve) => {
@@ -175,7 +223,7 @@ export function runPool<T, R>(
         return
       }
       const now = Date.now()
-      while (inFlight < limit) {
+      while (inFlight < limit && now >= pauseUntil) {
         const idx = queue.findIndex((q) => q.at <= now)
         if (idx === -1) break
         const job = queue.splice(idx, 1)[0]
@@ -185,7 +233,8 @@ export function runPool<T, R>(
           .then(
             (r) => {
               streak++
-              if (streak >= 10 && limit < max) {
+              consecutiveThrottles = 0
+              if (streak >= 8 && limit < max) {
                 limit++
                 streak = 0
               }
@@ -201,12 +250,16 @@ export function runPool<T, R>(
               if (retryable && job.attempt < maxRetries && !signal?.aborted) {
                 retried++
                 streak = 0
+                let at = Date.now() + 400 + Math.random() * 400
                 if (isThrottle) {
                   throttled++
+                  consecutiveThrottles++
                   limit = Math.max(min, Math.floor(limit / 2))
+                  const cooldown = Math.min(20000, 800 * 2 ** (consecutiveThrottles - 1)) + Math.random() * 600
+                  pauseUntil = Math.max(pauseUntil, Date.now() + cooldown)
+                  at = pauseUntil
                 }
-                const delay = 600 * 2 ** Math.min(job.attempt, 5) + Math.random() * 500
-                queue.push({ i: job.i, attempt: job.attempt + 1, at: Date.now() + delay })
+                queue.push({ i: job.i, attempt: job.attempt + 1, at })
               } else {
                 remaining--
                 onResult(job.i, e instanceof Error ? e : new Error(String(e)))
@@ -219,9 +272,9 @@ export function runPool<T, R>(
             pump()
           })
       }
-      // Everything left is waiting out a backoff: wake up when the first one is due.
+      // Everything left is waiting out a backoff or a cooldown: wake up when the first one is due.
       if (inFlight === 0 && remaining > 0 && queue.length > 0) {
-        const next = Math.min(...queue.map((q) => q.at))
+        const next = Math.max(pauseUntil, Math.min(...queue.map((q) => q.at)))
         window.setTimeout(pump, Math.max(50, next - Date.now()))
       }
     }

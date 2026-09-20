@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { category, shortName } from '../lib/data'
 import type { Brand, Platform } from '../lib/types'
-import { DIMENSION_KEYS, DIMENSION_LABELS, evaluate, pct, runPool, topTwo } from '../lib/jev'
+import { DIMENSION_KEYS, DIMENSION_LABELS, clearCached, evaluate, pct, readCached, runPool, topTwo, writeCached } from '../lib/jev'
 import type { BooleanAnswer, ChoiceAnswer, EvalResult, PoolStats, ScoreAnswer } from '../lib/jev'
 import { useAllBrands } from './Compare'
 import { BrandChip, Card, Pill, Quote, SectionTitle, StatTile } from './ui'
@@ -22,7 +22,8 @@ const START_CONCURRENCY = 3
 const MAX_CONCURRENCY = 6
 
 type Item = { brandId: number; brand: string; platform: Platform; offline: string; text: string }
-type Row = Item & { result?: EvalResult; error?: string }
+type Row = Item & { result?: EvalResult; error?: string; cached?: boolean }
+const PACK = 'triage'
 
 function collectQuotes(brands: Brand[], scope: number | 'all'): Item[] {
   const seen = new Set<string>()
@@ -59,14 +60,19 @@ export default function CorpusSweep() {
   const [threshold, setThreshold] = useState(0.8)
   const [view, setView] = useState<'disagree' | 'multi' | 'spam' | 'calls' | 'urgent'>('disagree')
   const [pool, setPool] = useState<PoolStats | null>(null)
+  const [reuse, setReuse] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
   const items = useMemo(() => (brands ? collectQuotes(brands, scope) : []), [brands, scope])
+  const doneCount = rows.filter((r) => r.result).length
+  // Recount whenever a live answer lands, since each one is written to storage as it arrives.
+  const cachedInScope = useMemo(() => items.filter((it) => readCached(PACK, it.text)).length, [items, doneCount])
 
   /**
    * Run the pack over a set of row indices. A fresh run covers every quote in
    * scope; "retry failed" passes only the rows that errored last time and keeps
-   * everything else.
+   * everything else. With `reuse` on, quotes this browser has already had
+   * answered are filled from storage and only the rest go to the provider.
    */
   async function run(indices?: number[]) {
     if (!brands || running) return
@@ -80,19 +86,23 @@ export default function CorpusSweep() {
       targets = indices
       base = rows.map((r, i) => (targets.includes(i) ? { ...r, error: undefined } : r))
     } else {
-      base = items.map((it) => ({ ...it }))
-      targets = base.map((_, i) => i)
+      base = items.map((it) => {
+        const hit = reuse ? readCached(PACK, it.text) : null
+        return hit ? { ...it, result: hit, cached: true } : { ...it }
+      })
+      targets = base.map((r, i) => (r.result ? -1 : i)).filter((i) => i >= 0)
     }
     setRows(base)
     const tick = window.setInterval(() => setElapsed(Date.now() - start), 100)
     const stats = await runPool(
       targets,
-      (i) => evaluate({ text: base[i].text, pack: 'triage' }, ctl.signal),
+      (i) => evaluate({ text: base[i].text, pack: PACK }, ctl.signal),
       (k, res) => {
         const i = targets[k]
+        if (!(res instanceof Error)) writeCached(PACK, base[i].text, res)
         setRows((prev) => {
           const next = prev.slice()
-          next[i] = res instanceof Error ? { ...next[i], error: res.message } : { ...next[i], result: res }
+          next[i] = res instanceof Error ? { ...next[i], error: res.message } : { ...next[i], result: res, cached: false }
           return next
         })
       },
@@ -111,9 +121,11 @@ export default function CorpusSweep() {
 
   /* ------------------------------------------------------------ analysis */
   const done = rows.filter((r) => r.result)
+  const live = done.filter((r) => !r.cached)
+  const reused = done.length - live.length
   const failed = rows.filter((r) => r.error)
-  const cost = done.reduce((s, r) => s + Number(r.result?.costUsd ?? 0), 0)
-  const tokens = done.reduce((s, r) => s + (r.result?.usage?.inputTokens ?? 0), 0)
+  const cost = live.reduce((s, r) => s + Number(r.result?.costUsd ?? 0), 0)
+  const tokens = live.reduce((s, r) => s + (r.result?.usage?.inputTokens ?? 0), 0)
   const agree = done.filter((r) => dim(r)?.choice === r.offline)
   const agreeRate = done.length ? agree.length / done.length : 0
 
@@ -169,9 +181,10 @@ export default function CorpusSweep() {
           </p>
           <p className="text-xs text-muted">
             Honesty note: the provider behind the gateway throttles sustained load on this key tier. The pool starts
-            at {START_CONCURRENCY} requests in flight, halves when it is pushed back, and retries with backoff — you will
-            see that happen in the counter. Model-side latency per answer stays in the low hundreds of milliseconds; the
-            wall-clock time is the queue, not the model.
+            at {START_CONCURRENCY} requests in flight, pauses the whole run when it is pushed back, and retries — you
+            will see that happen in the counter. Model-side latency per answer stays in the low hundreds of
+            milliseconds; the wall-clock time is the provider’s queue, not the model. Answers are also kept in this
+            browser, so a second run of the same scope is instant unless you switch reuse off.
           </p>
         </div>
       </Card>
@@ -217,9 +230,28 @@ export default function CorpusSweep() {
             </button>
           )}
           {!brands && <span className="text-xs text-muted">loading brand data…</span>}
+          <label className="flex items-center gap-1.5 text-xs text-ink-2">
+            <input type="checkbox" checked={reuse} onChange={(e) => setReuse(e.target.checked)} disabled={running} className="accent-[var(--accent)]" />
+            Reuse answers already in this browser
+            {cachedInScope > 0 && <span className="text-muted">({cachedInScope} of {items.length})</span>}
+          </label>
+          {cachedInScope > 0 && !running && (
+            <button
+              type="button"
+              onClick={() => {
+                clearCached()
+                setRows([])
+                setPool(null)
+              }}
+              className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              forget them
+            </button>
+          )}
           {rows.length > 0 && (
             <span className="text-xs tabular text-muted">
-              {done.length + failed.length}/{rows.length} · {(elapsed / 1000).toFixed(1)} s · ${cost.toFixed(4)}
+              {done.length + failed.length}/{rows.length} · {(elapsed / 1000).toFixed(1)} s · ${cost.toFixed(4)} live
+              {reused > 0 && <> · {reused} reused</>}
               {pool && (
                 <>
                   {' '}
@@ -249,7 +281,7 @@ export default function CorpusSweep() {
           <Card>
             <SectionTitle
               title={running ? 'Filling in…' : 'The audit'}
-              sub={`${done.length} quotes · ${(elapsed / 1000).toFixed(1)} seconds · ${tokens.toLocaleString()} input tokens · $${cost.toFixed(4)} total · four questions each`}
+              sub={`${done.length} quotes · ${live.length} answered live in ${(elapsed / 1000).toFixed(1)} s${reused ? `, ${reused} reused from an earlier run` : ''} · ${tokens.toLocaleString()} input tokens · $${cost.toFixed(4)} spent just now · four questions each`}
             />
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatTile label="Agree with offline label" value={pct(agreeRate)} hint={`${agree.length} of ${done.length} quotes`} />
@@ -257,8 +289,8 @@ export default function CorpusSweep() {
               <StatTile label="Flagged as spam" value={String(spamHits.length)} hint="the offline taxonomy had no slot for this" />
               <StatTile
                 label="Cost per quote"
-                value={`$${done.length ? (cost / done.length).toFixed(6) : '–'}`}
-                hint={`${done.length ? Math.round(done.reduce((s, r) => s + (r.result?.latencyMs ?? 0), 0) / done.length) : '–'} ms model-side each${pool ? `, ${pool.throttled} throttles` : ''}`}
+                value={`$${live.length ? (cost / live.length).toFixed(6) : done.length ? Number(done[0].result?.costUsd ?? 0).toFixed(6) : '–'}`}
+                hint={`${done.length ? Math.round(done.reduce((s, r) => s + (r.result?.latencyMs ?? 0), 0) / done.length) : '–'} ms model-side each${pool && pool.throttled ? `, ${pool.throttled} throttles` : ''}`}
               />
             </div>
           </Card>
