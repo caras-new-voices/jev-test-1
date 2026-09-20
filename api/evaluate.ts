@@ -1,5 +1,5 @@
 /**
- * Live comment evaluation through Jev (TypeSafe AI's System One model).
+ * Live evaluation through Jev (TypeSafe AI's System One model).
  *
  * Why this file exists at all: the rest of Listening Room is a static SPA, and
  * the twelve comment dimensions it shows were classified offline, in a batch,
@@ -25,15 +25,17 @@ declare const process: { env: Record<string, string | undefined> }
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/evaluate'
 const MODEL = 'typesafe-ai/jev'
-const MAX_CHARS = 1200
+const MAX_TEXT_CHARS = 1200
+const MAX_STATE_CHARS = 12000
 
 const LIMITS = {
-  questions: 5,
-  instructions: 300,
+  questions: 6,
+  instructions: 400,
   choiceOptions: 12,
   scoreRungs: 10,
-  criterion: 200,
+  criterion: 320,
   optionKey: 48,
+  bank: 10,
 }
 
 type Question =
@@ -64,8 +66,17 @@ const DIMENSIONS: Record<string, string> = {
 const COMMENT_CONTEXT =
   'This is a public comment left on a social post about a female hair-removal product (razors, epilators, depilatory cream, IPL). Comments may be in any language.'
 
+const SPAM: Question = {
+  type: 'boolean',
+  instructions: 'Is this comment spam, a scam, a bot, or otherwise not a genuine consumer comment?',
+  criteria: {
+    true: 'Account-hacking offers, giveaways, crypto, follow-for-follow, link bait, or copy-pasted junk',
+    false: 'A real person reacting to the product or the post',
+  },
+}
+
 /**
- * Four jobs the agency actually has to do with this corpus, each expressed as a
+ * The jobs the agency actually has to do with this corpus, each expressed as a
  * set of typed questions. They exist to show that Jev is not "a classifier" —
  * the same model answers routing, screening and data-quality questions, in
  * whatever shape the job needs, in one round trip.
@@ -98,15 +109,22 @@ const PACKS: Record<string, { label: string; questions: Record<string, Question>
           'Escalate now: safety, legal, or reputational risk',
         ],
       },
-      spam: {
-        type: 'boolean',
-        instructions: 'Is this comment spam, a scam, a bot, or otherwise not a genuine consumer comment?',
-        criteria: {
-          true: 'Account-hacking offers, giveaways, crypto, follow-for-follow, link bait, or copy-pasted junk',
-          false: 'A real person reacting to the product or the post',
-        },
-      },
+      spam: SPAM,
     },
+  },
+
+  /** Twelve booleans at once: a comment can live in several dimensions, and a single label hides that. */
+  profile: {
+    label: 'Full 12-dimension profile',
+    questions: Object.fromEntries(
+      Object.entries(DIMENSIONS).map(([key, desc]) => [
+        key,
+        {
+          type: 'boolean',
+          instructions: `${COMMENT_CONTEXT} Does this comment contain this signal: ${desc.toLowerCase()}?`,
+        } satisfies Question,
+      ]),
+    ),
   },
 
   route: {
@@ -209,10 +227,7 @@ const PACKS: Record<string, { label: string; questions: Record<string, Question>
           other: 'Some other language',
         },
       },
-      isEnglish: {
-        type: 'boolean',
-        instructions: 'Is this comment written in English?',
-      },
+      isEnglish: { type: 'boolean', instructions: 'Is this comment written in English?' },
       onTopic: {
         type: 'boolean',
         instructions: 'Is this comment actually about hair removal or a hair-removal product?',
@@ -221,16 +236,70 @@ const PACKS: Record<string, { label: string; questions: Record<string, Question>
           false: 'Off-topic chatter, tagging a friend, or about something else entirely',
         },
       },
-      spam: {
-        type: 'boolean',
-        instructions: 'Is this comment spam, a scam, a bot, or otherwise not a genuine consumer comment?',
+      spam: SPAM,
+    },
+  },
+
+  /** Runs on a whole interview transcript once the call has ended. */
+  debrief: {
+    label: 'Interview debrief',
+    questions: {
+      status: {
+        type: 'choice',
+        instructions:
+          'This is the transcript of a short voice interview about a hair-removal brand. What is the respondent’s relationship with the brand?',
         criteria: {
-          true: 'Account-hacking offers, giveaways, crypto, follow-for-follow, link bait, or copy-pasted junk',
-          false: 'A real person reacting to the product or the post',
+          current: 'Uses it now',
+          lapsed: 'Used it before and stopped',
+          considering: 'Has not bought yet but is thinking about it',
+          never: 'Has never used it and is not planning to',
+          unclear: 'The transcript does not say',
         },
+      },
+      driver: {
+        type: 'choice',
+        instructions: 'What matters most to this respondent when choosing a hair-removal product?',
+        criteria: {
+          price: 'Price and value',
+          skin: 'Skin comfort — irritation, cuts, sensitivity',
+          performance: 'How close, smooth, or long-lasting the result is',
+          convenience: 'Speed, ease, subscription, availability',
+          image: 'Brand image, design, what it says about them',
+          other: 'Something else or unclear',
+        },
+      },
+      churnRisk: {
+        type: 'score',
+        instructions: 'How likely is this respondent to leave the brand, or never adopt it?',
+        criteria: ['Loyal', 'Stable', 'Wavering', 'Gone or never coming'],
+      },
+      wouldRecommend: {
+        type: 'score',
+        instructions: 'How likely is this respondent to recommend the brand to a friend?',
+        criteria: ['Would warn people off', 'Would not mention it', 'Would recommend if asked', 'Actively recommends'],
+      },
+      quoteworthy: {
+        type: 'boolean',
+        instructions: 'Did the respondent say anything vivid and specific enough to quote on a slide to the brand?',
+      },
+      interviewQuality: {
+        type: 'score',
+        instructions: 'How much did this interview actually teach us about why the respondent behaves the way they do?',
+        criteria: ['Nothing new', 'A little', 'Something useful', 'A genuine insight'],
       },
     },
   },
+}
+
+/**
+ * Fixed follow-up probes for the adaptive interview. Jev decides *when* to use
+ * one; it never writes one. Every line the interviewer can say was written by a
+ * person, which is the whole reason this can sit between two voice turns.
+ */
+const PROBES: Record<string, string> = {
+  probe_more: 'Follow up: “Tell me more about that.”',
+  probe_why: 'Follow up: “Why do you think that is?”',
+  probe_then: 'Follow up: “And what did you do next?”',
 }
 
 export const config = { runtime: 'edge' }
@@ -245,9 +314,9 @@ function json(body: unknown, status = 200): Response {
 const str = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.length <= max
 
 /**
- * Validate a caller-supplied question set. Returns an error string, or null if
- * the set is safe to forward. Deliberately strict: unknown keys are dropped by
- * reconstruction rather than passed through.
+ * Validate a caller-supplied question set. Returns the cleaned set, or an error
+ * string. Deliberately strict: unknown keys are dropped by reconstruction rather
+ * than passed through.
  */
 function validate(raw: unknown): { questions: Record<string, Question> } | { error: string } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { error: 'questions must be an object' }
@@ -309,6 +378,49 @@ function validate(raw: unknown): { questions: Record<string, Question> } | { err
   return { questions: out }
 }
 
+/**
+ * Build the adaptive-interview question set. The caller sends the scripted
+ * questions that have not been asked yet (id + text, from the brand's script);
+ * the server adds the fixed probes and the option to end, and asks three side
+ * questions about the last exchange.
+ */
+function interviewQuestions(bankRaw: unknown, allowProbes: boolean): Record<string, Question> | { error: string } {
+  if (!Array.isArray(bankRaw) || bankRaw.length > LIMITS.bank) return { error: `bank must be an array of at most ${LIMITS.bank} items` }
+  const criteria: Record<string, string> = {}
+  for (const item of bankRaw as unknown[]) {
+    const it = item as { id?: unknown; text?: unknown }
+    if (!str(it?.id, LIMITS.optionKey) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(it.id as string)) return { error: 'bank items need an id' }
+    if (!str(it?.text, LIMITS.criterion)) return { error: `bank item ${String(it.id).slice(0, 20)}: text too long or missing` }
+    criteria[it.id as string] = `Ask: “${(it.text as string).trim()}”`
+  }
+  if (allowProbes) Object.assign(criteria, PROBES)
+  criteria.end = 'End the call now: we have learned what we can, or the respondent is disengaging'
+  if (Object.keys(criteria).length < 2) return { error: 'bank is empty' }
+
+  return {
+    next: {
+      type: 'choice',
+      instructions:
+        'This is a live two-minute voice interview about a hair-removal brand. `transcript` is everything said so far, most recent last. Given what the respondent just said, what should the interviewer do next? Prefer a follow-up probe only when the last answer opened something worth one more sentence. Prefer a scripted question that the last answer makes natural. End when the questions are exhausted or the respondent is clearly done.',
+      criteria,
+    },
+    answered: {
+      type: 'boolean',
+      instructions: 'Did the respondent’s most recent reply actually answer the interviewer’s most recent question?',
+    },
+    engagement: {
+      type: 'score',
+      instructions: 'How engaged is the respondent right now, judging by their most recent replies?',
+      criteria: ['Disengaging — short, evasive, wants to go', 'Polite but flat', 'Engaged and specific', 'Eager, volunteering detail'],
+    },
+    dimension: {
+      type: 'choice',
+      instructions: 'Which listening dimension does the respondent’s most recent reply speak to?',
+      criteria: DIMENSIONS,
+    },
+  }
+}
+
 export default async function handler(request: Request): Promise<Response> {
   if (request.method === 'GET') {
     // Lets the UI (and a curious reader) see exactly what the server will ask.
@@ -316,6 +428,7 @@ export default async function handler(request: Request): Promise<Response> {
       model: MODEL,
       limits: LIMITS,
       packs: Object.fromEntries(Object.entries(PACKS).map(([k, v]) => [k, { label: v.label, questions: v.questions }])),
+      probes: PROBES,
     })
   }
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
@@ -334,16 +447,25 @@ export default async function handler(request: Request): Promise<Response> {
     )
   }
 
-  let body: { text?: unknown; pack?: unknown; questions?: unknown }
+  let body: { text?: unknown; state?: unknown; pack?: unknown; questions?: unknown; bank?: unknown; allowProbes?: unknown }
   try {
     body = (await request.json()) as typeof body
   } catch {
     return json({ error: 'invalid_json' }, 400)
   }
 
-  let text = typeof body.text === 'string' ? body.text.trim() : ''
-  if (!text) return json({ error: 'empty_text', message: 'Send { "text": "a comment" }.' }, 400)
-  if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS)
+  // State is either a plain comment (`text`) or a structured object (`state`),
+  // e.g. an interview transcript. Both are capped.
+  let state: unknown
+  if (typeof body.text === 'string' && body.text.trim()) {
+    state = body.text.trim().slice(0, MAX_TEXT_CHARS)
+  } else if (body.state !== undefined && body.state !== null) {
+    const serialised = JSON.stringify(body.state)
+    if (serialised.length > MAX_STATE_CHARS) return json({ error: 'state_too_large', message: `state must serialise to ≤ ${MAX_STATE_CHARS} characters` }, 400)
+    state = body.state
+  } else {
+    return json({ error: 'empty_state', message: 'Send { "text": "a comment" } or { "state": {...} }.' }, 400)
+  }
 
   let questions: Record<string, Question>
   let packName: string | null = null
@@ -351,6 +473,11 @@ export default async function handler(request: Request): Promise<Response> {
     const checked = validate(body.questions)
     if ('error' in checked) return json({ error: 'invalid_questions', message: checked.error }, 400)
     questions = checked.questions
+  } else if (body.pack === 'interview') {
+    const built = interviewQuestions(body.bank, body.allowProbes !== false)
+    if ('error' in built) return json({ error: 'invalid_bank', message: built.error }, 400)
+    questions = built
+    packName = 'interview'
   } else {
     packName = typeof body.pack === 'string' && body.pack in PACKS ? body.pack : 'triage'
     questions = PACKS[packName].questions
@@ -362,7 +489,7 @@ export default async function handler(request: Request): Promise<Response> {
     upstream = await fetch(GATEWAY_URL, {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, state: text, questions }),
+      body: JSON.stringify({ model: MODEL, state, questions }),
     })
   } catch {
     return json({ error: 'gateway_unreachable', message: 'Could not reach the AI Gateway.' }, 502)

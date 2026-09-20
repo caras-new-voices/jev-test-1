@@ -2,19 +2,22 @@ import { useEffect, useState } from 'react'
 import AskNext from './components/AskNext'
 import BrandView from './components/BrandView'
 import Compare from './components/Compare'
-import LiveTriage from './components/LiveTriage'
+import JevLab, { type LabTab } from './components/JevLab'
 import Overview from './components/Overview'
 import { BrandChip } from './components/ui'
 import { category } from './lib/data'
 
-type Route = { view: 'overview' } | { view: 'brand'; id: number } | { view: 'compare' } | { view: 'ask' } | { view: 'live' }
+type Route = { view: 'overview' } | { view: 'brand'; id: number } | { view: 'compare' } | { view: 'ask' } | { view: 'live'; tab: LabTab }
 
 function parse(hash: string): Route {
   const m = hash.match(/^#\/brand\/(\d+)/)
   if (m) return { view: 'brand', id: Number(m[1]) }
   if (hash.startsWith('#/compare')) return { view: 'compare' }
   if (hash.startsWith('#/ask')) return { view: 'ask' }
-  if (hash.startsWith('#/live')) return { view: 'live' }
+  if (hash.startsWith('#/live')) {
+    const tab: LabTab = hash.startsWith('#/live/audit') ? 'audit' : hash.startsWith('#/live/call') ? 'call' : 'try'
+    return { view: 'live', tab }
+  }
   return { view: 'overview' }
 }
 
@@ -75,7 +78,7 @@ export default function App() {
         {route.view === 'brand' && (category.brands.some((b) => b.id === route.id) ? <BrandView id={route.id} /> : <Overview onOpen={openBrand} />)}
         {route.view === 'compare' && <Compare onOpen={openBrand} />}
         {route.view === 'ask' && <AskNext />}
-        {route.view === 'live' && <LiveTriage />}
+        {route.view === 'live' && <JevLab tab={route.tab} />}
       </main>
 
       <footer className="mx-auto max-w-7xl px-4 pb-8 text-xs text-muted">

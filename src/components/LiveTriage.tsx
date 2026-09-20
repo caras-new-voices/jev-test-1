@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { category, shortName } from '../lib/data'
 import { compact } from '../lib/format'
+import { EvalError, evaluate, optionLabel, pct, pretty } from '../lib/jev'
+import type { Answer, EvalResult, QuestionSpec } from '../lib/jev'
 import { Card, Pill, SectionTitle, StatTile } from './ui'
 
 /**
@@ -10,28 +12,18 @@ import { Card, Pill, SectionTitle, StatTile } from './ui'
  * comment — with a ready-made question pack or one they write themselves.
  */
 
-/* ------------------------------------------------------------------ labels */
-
-const DIMENSION_LABELS: Record<string, string> = {
-  purchase_intent: 'Purchase intent',
-  objections: 'Objections',
-  faq_gaps: 'Unanswered questions',
-  safety_complaints: 'Safety complaints',
-  crisis_backlash: 'Backlash',
-  loyalty_signals: 'Loyalty',
-  feature_requests: 'Feature requests',
-  competitor_mentions: 'Competitor mentions',
-  cross_brand_affinity: 'Cross-brand affinity',
-  use_case_discovery: 'Use-case discovery',
-  partnership_perception: 'Partnership perception',
-  engagement_quality: 'Low-substance engagement',
-}
+/* ------------------------------------------------------------------- packs */
 
 const PACKS = [
   {
     id: 'triage',
     label: 'Comment triage',
     blurb: 'Reproduces the offline pipeline: which of the twelve dimensions, is it spam, is it urgent, is this person worth a call.',
+  },
+  {
+    id: 'profile',
+    label: 'Full 12-dimension profile',
+    blurb: 'Twelve booleans in one request. A comment is rarely about one thing; the offline pass had to pick one. This does not.',
   },
   {
     id: 'route',
@@ -115,69 +107,7 @@ const EXAMPLES: Example[] = [
 
 /* ----------------------------------------------------------------- results */
 
-type ChoiceAnswer = { type: 'choice'; choice: string; probabilities: Record<string, number>; confidence?: number }
-type BooleanAnswer = { type: 'boolean'; probability: number }
-type ScoreAnswer = { type: 'score'; score: number; probabilities: Record<string, number>; confidence?: number }
-type Answer = ChoiceAnswer | BooleanAnswer | ScoreAnswer
-
-type QuestionSpec =
-  | { type: 'choice'; instructions: string; criteria: Record<string, string> }
-  | { type: 'boolean'; instructions: string; criteria?: { true: string; false: string } }
-  | { type: 'score'; instructions: string; criteria: string[] }
-
-type Result = {
-  model: string
-  pack: string | null
-  questions: Record<string, QuestionSpec>
-  answers: Record<string, Answer>
-  usage: { inputTokens?: number; outputTokens?: number } | null
-  costUsd: string | null
-  latencyMs: number
-}
-
-/** Readable titles for the answer keys the packs use; custom keys fall back to pretty(). */
-const ANSWER_LABELS: Record<string, string> = {
-  dimension: 'Listening dimension',
-  worthACall: 'Worth a voice call',
-  urgency: 'Urgency',
-  spam: 'Spam',
-  owner: 'Owning team',
-  publicReply: 'Reply publicly',
-  tone: 'What the reply should do',
-  priority: 'Queue priority',
-  goodCandidate: 'Good interview candidate',
-  openingQuestion: 'Opening question',
-  buyerLikelihood: 'Has actually bought',
-  candour: 'Candour',
-  language: 'Language',
-  isEnglish: 'Written in English',
-  onTopic: 'About hair removal',
-}
-
-const pct = (n: number) => `${Math.round(n * 100)}%`
-
-/** camelCase / snake_case → sentence case, for keys we have no label for. */
-const pretty = (k: string) =>
-  DIMENSION_LABELS[k] ??
-  ANSWER_LABELS[k] ??
-  k
-    .replace(/_/g, ' ')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/^./, (c) => c.toUpperCase())
-
-/**
- * Label one option of a choice question. Prefer our short dimension names, then
- * the criteria description the API echoes back when it is short enough to be a
- * label (e.g. "Ukrainian" for `uk`), and only then the bare key.
- */
-function optionLabel(key: string, spec?: QuestionSpec): string {
-  if (DIMENSION_LABELS[key]) return DIMENSION_LABELS[key]
-  if (spec?.type === 'choice') {
-    const desc = spec.criteria[key]
-    if (desc && desc.length <= 32) return desc
-  }
-  return pretty(key)
-}
+type Result = EvalResult
 
 function Bar({ label, value, emphasis = false }: { label: string; value: number; emphasis?: boolean }) {
   return (
@@ -329,16 +259,13 @@ export default function LiveTriage() {
     setError(null)
     setResult(null)
     try {
-      const res = await fetch('/api/evaluate', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      const body = await res.json()
-      if (!res.ok) setError(body?.message || body?.detail || `${body?.error ?? 'Request failed'} (HTTP ${res.status})`)
-      else setResult(body as Result)
-    } catch {
-      setError('Could not reach /api/evaluate. Under `vite preview` the function does not exist — use `vercel dev`, or the deployed site.')
+      setResult(await evaluate(payload))
+    } catch (e) {
+      setError(
+        e instanceof EvalError
+          ? e.message
+          : 'Could not reach /api/evaluate. Under `vite preview` the function does not exist — use `vercel dev`, or the deployed site.',
+      )
     } finally {
       setBusy(false)
     }
@@ -357,9 +284,12 @@ export default function LiveTriage() {
           right={<Pill tone="accent">live API call</Pill>}
         />
         <p className="text-sm leading-relaxed text-ink-2">
-          Below: the dataset the report was built from, what Jev is and how this site is connected to it, four
-          ready-made jobs you can run against any comment, and a box to write your own question. Nothing here is
-          pre-recorded — every answer on this page is fetched when you press the button.
+          Three demonstrations, in the tabs above. This one works on a single comment: the dataset the report was built
+          from, what Jev is and how this site is connected to it, five ready-made jobs, and a box to write your own
+          question. <strong className="text-ink">The whole report</strong> re-classifies every quote in the report live
+          and audits the offline pass. <strong className="text-ink">A live call</strong> lets Jev choose the next
+          scripted question between voice turns. Nothing is pre-recorded — every answer is fetched when you press a
+          button.
         </p>
       </Card>
 
@@ -483,7 +413,7 @@ export default function LiveTriage() {
       <Card>
         <SectionTitle
           title="Choose what to ask about it"
-          sub="The same comment, the same model — four different jobs. Each pack asks four questions in one request."
+          sub="The same comment, the same model — five different jobs, each answered in one request."
         />
         <div className="grid gap-2 sm:grid-cols-2">
           {PACKS.map((p) => (
