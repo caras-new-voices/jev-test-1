@@ -14,9 +14,11 @@
  * key. The key itself is read from the environment and never leaves this file.
  */
 
-// The function runs on Vercel's Node runtime, where `process.env` exists. The
-// project has no @types/node (it is a browser-only Vite app), so declare just
-// the one global we need rather than pulling in the whole Node type surface.
+// Runs on Vercel's Edge runtime, which speaks web-standard Request/Response.
+// (The Node builder treats a default export as a classic `(req, res)` handler
+// and waits for `res.end()`, so returning a Response there hangs the request.)
+// The project has no @types/node — it is a browser-only Vite app — so declare
+// just the one global we need rather than pulling in the Node type surface.
 declare const process: { env: Record<string, string | undefined> }
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/evaluate'
@@ -85,7 +87,7 @@ const QUESTIONS = {
   },
 }
 
-export const config = { runtime: 'nodejs' }
+export const config = { runtime: 'edge' }
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
