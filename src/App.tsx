@@ -41,7 +41,7 @@ export default function App() {
     { key: 'overview', label: 'Category', hash: '#/' },
     { key: 'compare', label: 'Compare', hash: '#/compare' },
     { key: 'ask', label: 'Ask them next', hash: '#/ask' },
-    { key: 'live', label: 'Live triage', hash: '#/live' },
+    { key: 'live', label: 'Live with Jev', hash: '#/live' },
   ]
 
   return (
