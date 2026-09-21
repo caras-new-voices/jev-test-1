@@ -7,6 +7,7 @@ A demo site that turns a competitive social-listening export into something you 
 - **Category** – earned media value ranking, post-level sentiment, weekly creator activity as small multiples, and the one-line diagnosis for each brand.
 - **Brand** – headline metrics, platform and tier mix, the Assess / Anticipate / Act read per platform, twelve comment-listening dimensions with verbatim quotes, and (for Estrid) a table of top creator posts.
 - **Compare** – signal density across brands, who gets named in whose comments, objection categories, and intent-vs-friction.
+- **Real EMV** – the headline number re-based on whether each post is actually about the product. Every one of the 6,168 creator posts was asked six typed questions by Jev offline; this view shows reported against real EMV per brand and per month, where the money went by post format, the biggest off-topic posts one by one, a paid-disclosure audit against Brandwatch's `is_paid` flag, and the languages the export left as "unknown". See *The offline pass* below.
 - **Ask them next** – a deterministic outbound voice-survey script built from each brand's own comment evidence, with the signal behind every question. This is the bridge from listening to a New Voices style conversation.
 - **Live with Jev** – the only views that call a model at view time, through [Jev](https://vercel.com/ai-gateway/models/jev), TypeSafe AI's System One model. Three tabs:
   - *One comment* (`#/live`) – the dataset, what Jev is, five question packs and a custom-question box.
@@ -33,6 +34,41 @@ Questions of different types share one piece of state and are answered in a sing
 - **Language and data quality** – what language, is it English, is it on topic, is it spam.
 
 Plus a **Full 12-dimension profile** pack (twelve booleans in one request — a comment can live in several dimensions, and the offline pass had to pick one) and a **custom question builder**: the visitor writes any `choice`, `boolean` or `score` they like. `api/evaluate.ts` validates it (≤6 questions, ≤12 options, ≤400 characters of instructions, ≤10 score rungs) and still pins the model, so the endpoint never becomes a general-purpose relay. Because Jev cannot emit free text, the answer always lands in the declared shape.
+
+### The offline pass over every post (`scripts/score_posts.py`)
+
+The *Real EMV* view is the other half of the argument: the same model, run
+**offline over the whole corpus** instead of live over a sample. The export
+ships `relevant`, `relevance_confidence` and `relevance_reason` columns that
+are empty on all 6,168 rows — the slot for "is this post actually about the
+product" exists and nobody filled it. One pass of Jev fills it, plus
+prominence, paid-partnership disclosure, post format, product claim and
+language, six typed questions in a single round trip per post.
+
+```
+npm run score                             # score every unscored post
+python3 scripts/score_posts.py --dry-run  # show the state for three posts
+python3 scripts/score_posts.py --limit 30 # score 30, then read them
+python3 scripts/score_posts.py --build    # aggregate to src/data/posts_scored.json
+```
+
+It is standard-library Python and calls the **deployed** `/api/evaluate`, so it
+needs no key of its own. Answers are appended to `data/raw/post_scores.jsonl`
+as they land and a second run skips what is already there, so the run is
+resumable and safe to interrupt. It is throttle-aware in the same way
+`runPool` is: a 429 pauses every worker for `min(20s, 0.8s·2^n)`, 502/504 are
+retried without touching concurrency, and a post that fails twelve attempts is
+parked in `post_scores.failed.jsonl` for a later run. Expect roughly one to two
+posts a second and an hour or two for the full corpus.
+
+`--build` joins the JSONL back onto `posts.csv` and writes
+**`src/data/posts_scored.json`**, which *is* committed — the view reads it
+lazily (`import.meta.glob`), so no model is called at view time and the main
+bundle is unaffected. It also prints a sanity report: coverage, off-topic share
+of posts and of EMV per brand, the disclosure 2×2, and how many
+Brandwatch-"unknown" languages Jev resolved. To refresh the committed file,
+re-run the scorer (or delete `data/raw/post_scores.jsonl` to start clean) and
+run `--build` again. Nothing under `data/raw/` is ever committed.
 
 ### The whole report (`#/live/audit`)
 

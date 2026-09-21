@@ -34,6 +34,13 @@ export default function Overview({ onOpen }: { onOpen: (id: number) => void }) {
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-3">
           <SectionTitle title="Who is buying the conversation" sub="Earned media value of creator posts mentioning each brand, Oct 2025 → Aug 2026" />
+          <p className="-mt-2 mb-2 text-sm text-ink-2">
+            Counts every matched post. See{' '}
+            <button type="button" onClick={() => { window.location.hash = '#/real-emv' }} className="text-ink underline underline-offset-2 hover:text-accent">
+              Real EMV
+            </button>{' '}
+            for the share that is actually about the product.
+          </p>
           <div className="h-64">
             <ResponsiveContainer>
               <BarChart data={rank} layout="vertical" margin={{ left: 8, right: 56, top: 4, bottom: 4 }} barSize={18}>

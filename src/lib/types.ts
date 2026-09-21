@@ -84,3 +84,50 @@ export interface Post {
 }
 
 export interface PostsFile { segment: number; total: number; posts: Post[] }
+
+/* ---------------------------------------------- offline Jev pass (Real EMV) */
+
+/** One question as it was put to Jev, echoed into the data file so the view can show it. */
+export type ScoredQuestion =
+  | { type: 'choice'; instructions: string; criteria: Record<string, string> }
+  | { type: 'boolean'; instructions: string; criteria?: { true: string; false: string } }
+  | { type: 'score'; instructions: string; criteria: string[] }
+
+/** One creator post with the six answers. Probabilities and scores are rounded to 2 dp. */
+export interface ScoredPost {
+  id: string
+  brandId: number
+  platform: Platform
+  date: string
+  username: string
+  url: string
+  country: string | null
+  tier: string | null
+  followers: number
+  emv: number
+  /** Brandwatch's own is_paid flag. */
+  paidFlag: boolean
+  /** Brandwatch's own language field: "unknown" on 64% of rows. */
+  bwLanguage: string
+  snippet: string
+  /** Probability the post is substantively about the brand's product. */
+  about: number
+  /** How central the product is, 0–3. */
+  prom: number
+  /** Probability the caption discloses a paid or gifted partnership. */
+  disclosed: number
+  format: string
+  formatP: number
+  claim: string
+  lang: string
+  langP: number
+}
+
+export interface ScoredPostsFile {
+  generatedAt: string
+  model: string
+  coverage: { posts: number; scored: number; failed: number }
+  spend: { costUsd: number; modelMs: number; wallSeconds: number }
+  questions: Record<string, ScoredQuestion>
+  posts: ScoredPost[]
+}

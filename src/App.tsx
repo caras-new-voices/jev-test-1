@@ -4,15 +4,17 @@ import BrandView from './components/BrandView'
 import Compare from './components/Compare'
 import JevLab, { type LabTab } from './components/JevLab'
 import Overview from './components/Overview'
+import RealEmv from './components/RealEmv'
 import { BrandChip } from './components/ui'
 import { category } from './lib/data'
 
-type Route = { view: 'overview' } | { view: 'brand'; id: number } | { view: 'compare' } | { view: 'ask' } | { view: 'live'; tab: LabTab }
+type Route = { view: 'overview' } | { view: 'brand'; id: number } | { view: 'compare' } | { view: 'real' } | { view: 'ask' } | { view: 'live'; tab: LabTab }
 
 function parse(hash: string): Route {
   const m = hash.match(/^#\/brand\/(\d+)/)
   if (m) return { view: 'brand', id: Number(m[1]) }
   if (hash.startsWith('#/compare')) return { view: 'compare' }
+  if (hash.startsWith('#/real-emv')) return { view: 'real' }
   if (hash.startsWith('#/ask')) return { view: 'ask' }
   if (hash.startsWith('#/live')) {
     const tab: LabTab = hash.startsWith('#/live/audit') ? 'audit' : hash.startsWith('#/live/call') ? 'call' : 'try'
@@ -43,6 +45,7 @@ export default function App() {
   const nav: { key: Route['view']; label: string; hash: string }[] = [
     { key: 'overview', label: 'Category', hash: '#/' },
     { key: 'compare', label: 'Compare', hash: '#/compare' },
+    { key: 'real', label: 'Real EMV', hash: '#/real-emv' },
     { key: 'ask', label: 'Ask them next', hash: '#/ask' },
     { key: 'live', label: 'Live with Jev', hash: '#/live' },
   ]
@@ -77,6 +80,7 @@ export default function App() {
         {route.view === 'overview' && <Overview onOpen={openBrand} />}
         {route.view === 'brand' && (category.brands.some((b) => b.id === route.id) ? <BrandView id={route.id} /> : <Overview onOpen={openBrand} />)}
         {route.view === 'compare' && <Compare onOpen={openBrand} />}
+        {route.view === 'real' && <RealEmv />}
         {route.view === 'ask' && <AskNext />}
         {route.view === 'live' && <JevLab tab={route.tab} />}
       </main>

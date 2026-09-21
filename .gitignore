@@ -7,3 +7,4 @@ data/raw/
 .env
 .env.*
 !.env.example
+__pycache__/

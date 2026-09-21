@@ -1,5 +1,5 @@
 import categoryJson from '../data/category.json'
-import type { Brand, BrandIndex, PostsFile } from './types'
+import type { Brand, BrandIndex, PostsFile, ScoredPostsFile } from './types'
 
 export const category = categoryJson as { brands: BrandIndex[]; category: string; generatedFrom: string }
 
@@ -12,6 +12,8 @@ type BrandCore = Pick<Brand, 'id' | 'slug' | 'name' | 'ai' | 'aiMeta'>
 const brandModules = import.meta.glob<BrandCore>('../data/brands/*[0-9].json', { import: 'default' })
 const commentModules = import.meta.glob<Brand['comments']>('../data/brands/*.comments.json', { import: 'default' })
 const postModules = import.meta.glob<PostsFile>('../data/posts/*.json', { import: 'default' })
+// ~1.5 MB of per-post Jev scores: only the Real EMV view pulls it, so it stays out of the main bundle.
+const scoredModule = import.meta.glob<ScoredPostsFile>('../data/posts_scored.json', { import: 'default' })
 
 export async function loadBrand(id: number): Promise<Brand> {
   const core = brandModules[`../data/brands/${id}.json`]
@@ -29,3 +31,9 @@ export async function loadPosts(id: number): Promise<PostsFile | null> {
 }
 
 export const hasPosts = (id: number) => Boolean(postModules[`../data/posts/${id}.json`])
+
+/** The offline Jev pass over every creator post. Lazy: one chunk, fetched on demand. */
+export async function loadScoredPosts(): Promise<ScoredPostsFile | null> {
+  const loader = scoredModule['../data/posts_scored.json']
+  return loader ? loader() : null
+}
