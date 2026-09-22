@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { category, shortName } from '../lib/data'
 import { compact } from '../lib/format'
 import { EvalError, evaluate, optionLabel, pct, pretty } from '../lib/jev'
+import { englishFor, useTranslations } from '../lib/translate'
 import type { Answer, EvalResult, QuestionSpec } from '../lib/jev'
 import { Card, Pill, SectionTitle, StatTile } from './ui'
 
@@ -191,6 +192,7 @@ function AnswerBlock({ name, spec, answer }: { name: string; spec?: QuestionSpec
 /* -------------------------------------------------------------- the screen */
 
 export default function LiveTriage() {
+  useTranslations()
   const [text, setText] = useState(EXAMPLES[0].text)
   const [active, setActive] = useState<Example | null>(EXAMPLES[0])
   const [pack, setPack] = useState<PackId>('triage')
@@ -403,6 +405,14 @@ export default function LiveTriage() {
           placeholder="…or paste any comment, in any language, and see what comes back."
           className="w-full resize-y rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm leading-relaxed text-ink outline-none focus:border-axis"
         />
+        {englishFor(text) && (
+          <p className="mt-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-ink-2">
+            <span className="font-medium text-ink">In English:</span> {englishFor(text)}
+            <span className="mt-1 block text-muted">
+              Jev is sent the original above, untranslated — it reads every language natively, so nothing is translated before it decides.
+            </span>
+          </p>
+        )}
         {active && (
           <p className="mt-2 text-xs leading-relaxed text-muted">
             <strong className="text-ink-2">{active.brand}</strong> — {active.why}

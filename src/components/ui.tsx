@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { brandSlot, shortName } from '../lib/data'
 import { compact } from '../lib/format'
+import { englishFor, useLangMode, useTranslations } from '../lib/translate'
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <section className={`rounded-xl border border-border bg-surface p-4 sm:p-5 ${className}`}>{children}</section>
@@ -69,10 +70,42 @@ export function Legend({ items }: { items: { label: string; color: string }[] })
   )
 }
 
+/**
+ * Renders one piece of source text in the reader's chosen language. When an
+ * English translation exists and English is selected, the translation is shown
+ * and the verbatim original is kept directly beneath it — the evidence is never
+ * replaced, only accompanied.
+ */
+export function Translated({ text, className = '', originalClassName = '' }: { text: string; className?: string; originalClassName?: string }) {
+  useTranslations()
+  const mode = useLangMode()
+  const en = englishFor(text)
+  if (!en || mode === 'original') return <span className={className}>{text}</span>
+  return (
+    <>
+      <span className={className}>{en}</span>
+      <span className={`mt-1 block text-xs italic text-muted ${originalClassName}`} lang="und" dir="auto">
+        {text}
+      </span>
+    </>
+  )
+}
+
 export function Quote({ text, meta }: { text: string; meta?: string }) {
+  useTranslations()
+  const mode = useLangMode()
+  const en = englishFor(text)
+  const showBoth = Boolean(en) && mode === 'en'
   return (
     <blockquote className="rounded-lg border-l-2 border-axis bg-surface-2 px-3 py-2 text-sm leading-relaxed text-ink">
-      <span className="text-muted">“</span>{text}<span className="text-muted">”</span>
+      <span className="text-muted">“</span>
+      {showBoth ? en : text}
+      <span className="text-muted">”</span>
+      {showBoth && (
+        <div className="mt-1.5 border-t border-border pt-1.5 text-xs italic leading-relaxed text-muted" dir="auto">
+          {text}
+        </div>
+      )}
       {meta && <div className="mt-1 text-xs text-muted">{meta}</div>}
     </blockquote>
   )

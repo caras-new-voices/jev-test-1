@@ -7,6 +7,7 @@ import Overview from './components/Overview'
 import RealEmv from './components/RealEmv'
 import { BrandChip } from './components/ui'
 import { category } from './lib/data'
+import { setLangMode, useLangMode } from './lib/translate'
 
 type Route = { view: 'overview' } | { view: 'brand'; id: number } | { view: 'compare' } | { view: 'real' } | { view: 'ask' } | { view: 'live'; tab: LabTab }
 
@@ -28,6 +29,7 @@ export default function App() {
   const [theme, setTheme] = useState<'auto' | 'light' | 'dark'>(() => {
     try { return (localStorage.getItem('theme') as 'light' | 'dark') || 'auto' } catch { return 'auto' }
   })
+  const lang = useLangMode()
 
   useEffect(() => {
     const onHash = () => { setRoute(parse(window.location.hash)); window.scrollTo({ top: 0 }) }
@@ -63,10 +65,18 @@ export default function App() {
               <button key={n.key} type="button" onClick={() => go(n.hash)} className={`rounded-md px-3 py-1.5 text-sm ${route.view === n.key ? 'bg-ink text-page' : 'text-ink-2 hover:bg-surface-2 hover:text-ink'}`}>{n.label}</button>
             ))}
           </nav>
-          <div className="ml-auto flex items-center gap-1 text-xs">
-            {(['auto', 'light', 'dark'] as const).map((t) => (
-              <button key={t} type="button" onClick={() => setTheme(t)} aria-pressed={theme === t} className={`rounded px-2 py-1 ${theme === t ? 'bg-surface-2 text-ink' : 'text-muted hover:text-ink'}`}>{t}</button>
-            ))}
+          <div className="ml-auto flex items-center gap-3 text-xs">
+            <div className="flex items-center gap-1" title="Non-English quotes are shown in English with the original kept underneath">
+              <span className="text-muted">text</span>
+              {([['en', 'English'], ['original', 'original']] as const).map(([m, label]) => (
+                <button key={m} type="button" onClick={() => setLangMode(m)} aria-pressed={lang === m} className={`rounded px-2 py-1 ${lang === m ? 'bg-surface-2 text-ink' : 'text-muted hover:text-ink'}`}>{label}</button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              {(['auto', 'light', 'dark'] as const).map((t) => (
+                <button key={t} type="button" onClick={() => setTheme(t)} aria-pressed={theme === t} className={`rounded px-2 py-1 ${theme === t ? 'bg-surface-2 text-ink' : 'text-muted hover:text-ink'}`}>{t}</button>
+              ))}
+            </div>
           </div>
         </div>
         <div className="mx-auto flex max-w-7xl gap-2 overflow-x-auto px-4 pb-3">

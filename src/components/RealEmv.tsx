@@ -3,7 +3,7 @@ import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, Respons
 import { BRAND_ORDER, brandSlot, category, loadScoredPosts, shortName } from '../lib/data'
 import type { ScoredPost, ScoredPostsFile } from '../lib/types'
 import { compact, money } from '../lib/format'
-import { BrandChip, Card, ChartTooltip, Legend, Num, Pill, SectionTitle, StatTile, Swatch } from './ui'
+import { BrandChip, Card, ChartTooltip, Legend, Num, Pill, SectionTitle, StatTile, Swatch, Translated } from './ui'
 
 /**
  * Real EMV — the report's headline number, re-based on whether each post is
@@ -437,7 +437,9 @@ function OffTopicTable({ posts }: { posts: ScoredPost[] }) {
                 </td>
                 <td className="py-2 pr-3 text-right tabular text-ink-2">{probPct(p.about)}</td>
                 <td className="py-2 pr-3 text-right tabular text-ink-2">{p.prom.toFixed(2)} / 3</td>
-                <td className="max-w-md py-2 text-xs leading-relaxed text-muted">{p.snippet || <em>no caption</em>}</td>
+                <td className="max-w-md py-2 text-xs leading-relaxed text-muted">
+                  {p.snippet ? <Translated text={p.snippet} /> : <em>no caption</em>}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
