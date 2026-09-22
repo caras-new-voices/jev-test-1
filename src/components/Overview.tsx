@@ -1,7 +1,7 @@
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { category, brandSlot, shortName } from '../lib/data'
 import { compact, money, pct } from '../lib/format'
-import { Card, ChartTooltip, Legend, Pill, SectionTitle, StatTile, Swatch } from './ui'
+import { Card, ChartTooltip, Legend, Pill, SectionTitle, StatTile, Swatch, Translated } from './ui'
 
 const brands = category.brands
 
@@ -115,7 +115,7 @@ export default function Overview({ onOpen }: { onOpen: (id: number) => void }) {
                 <span className="font-medium text-ink">{b.name}</span>
                 <Pill tone={b.framing.includes('risk') ? 'bad' : 'accent'}>{b.framing}</Pill>
               </div>
-              <p className="text-sm leading-relaxed text-ink-2">{b.headline}</p>
+              <p className="text-sm leading-relaxed text-ink-2"><Translated text={b.headline} /></p>
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
                 <span>{compact(b.metrics.posts, 1)} posts</span>
                 <span>{compact(b.metrics.influencers, 1)} creators</span>

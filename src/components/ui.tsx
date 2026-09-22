@@ -131,8 +131,19 @@ export function ChartTooltip({ active, payload, label, format }: { active?: bool
   )
 }
 
-/** Render the insight HTML (h3/ul/li/strong/em/p only) produced by the analysis pipeline. */
-export function InsightHtml({ html }: { html: string }) {
+/**
+ * Render the insight HTML (h3/ul/li/strong/em/p only) produced by the analysis
+ * pipeline. Some brands' analysis was written in the market's own language
+ * (Mercadona in Spanish, Wilkinson Sword in French), so it goes through the
+ * same English/original switch as everything else. These blocks are long, so
+ * rather than printing both at once the original is reached via the header
+ * control rather than shown underneath.
+ */
+export function InsightHtml({ html: source }: { html: string }) {
+  useTranslations()
+  const mode = useLangMode()
+  const en = englishFor(source)
+  const html = en && mode === 'en' ? en : source
   const safe = html
     .replace(/<(script|style|iframe)[\s\S]*?<\/\1>/gi, '')
     .replace(/<(?!\/?(h3|ul|ol|li|strong|em|p|br)\b)[^>]*>/gi, '')

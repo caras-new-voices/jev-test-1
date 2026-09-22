@@ -3,7 +3,7 @@ import { Bar, BarChart, CartesianGrid, LabelList, ResponsiveContainer, Tooltip, 
 import { brandSlot, category, hasPosts, loadBrand, loadPosts } from '../lib/data'
 import { compact, money, pct, titleCase } from '../lib/format'
 import type { Brand, Dimension, Platform, Post } from '../lib/types'
-import { Card, ChartTooltip, InsightHtml, Pill, Quote, SectionTitle, StatTile, Swatch } from './ui'
+import { Card, ChartTooltip, InsightHtml, Pill, Quote, SectionTitle, StatTile, Swatch, Translated } from './ui'
 
 const PLATFORMS: Platform[] = ['tiktok', 'instagram', 'youtube']
 const PLATFORM_LABEL: Record<Platform | 'all', string> = { all: 'All platforms', tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube' }
@@ -62,7 +62,7 @@ export default function BrandView({ id }: { id: number }) {
           <div className="max-w-3xl">
             <div className="flex items-center gap-2 text-sm text-ink-2"><Swatch id={id} size={12} /> Brand segment · scanned from {index.scanStart} · analysed {index.analyzedAt}</div>
             <h1 className="mt-1 text-2xl font-semibold text-ink">{index.name}</h1>
-            <p className="mt-2 text-base leading-relaxed text-ink-2">{index.headline}</p>
+            <p className="mt-2 text-base leading-relaxed text-ink-2"><Translated text={index.headline} /></p>
           </div>
           <Pill tone={index.framing.includes('risk') ? 'bad' : 'accent'}>{index.framing}</Pill>
         </div>
@@ -96,7 +96,7 @@ export default function BrandView({ id }: { id: number }) {
         />
         {brand?.ai[aiTab] ? (
           <div>
-            <p className="mb-4 rounded-lg bg-surface-2 px-4 py-3 text-sm font-medium leading-relaxed text-ink">{brand.ai[aiTab].headline}</p>
+            <p className="mb-4 rounded-lg bg-surface-2 px-4 py-3 text-sm font-medium leading-relaxed text-ink"><Translated text={brand.ai[aiTab].headline} /></p>
             <div className="grid gap-5 lg:grid-cols-3">
               <InsightHtml html={brand.ai[aiTab].assess} />
               <InsightHtml html={brand.ai[aiTab].anticipate} />
